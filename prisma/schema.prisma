@@ -1,0 +1,171 @@
+// Driver-adapter mode: the query engine runs as bundled WASM instead of a
+// downloaded native binary, and talks to Postgres through `pg` directly.
+// This is also Prisma's recommended path for serverless/edge deploys
+// (Vercel + Neon), so it's not just a local-dev convenience.
+generator client {
+  provider   = "prisma-client-js"
+  engineType = "client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+//  There is no login in this app. This User model isn't an auth table
+//  anymore (Better Auth, and its Session/Account/Verification models, were
+//  removed along with the sign-up/sign-in flow) — it exists only so
+//  Report/InterviewReport keep a userId foreign key. A single fixed "Guest"
+//  row is upserted lazily the first time something is saved (see
+//  lib/guest.ts); nothing here is ever used to authenticate anyone.
+// ─────────────────────────────────────────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  name          String
+  email         String    @unique
+  emailVerified Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  reports          Report[]
+  interviewReports InterviewReport[]
+
+  @@map("user")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+//  Application data
+// ─────────────────────────────────────────────────────────────────────────
+
+// Editable benchmark requirements per dream company (was CompanyDatabase.java).
+model Company {
+  id             String   @id @default(cuid())
+  name           String   @unique
+  description    String
+  java           Int
+  python         Int
+  sql            Int
+  dsa            Int
+  communication  Int
+  projects       Int
+  certifications Int
+
+  // Where these numbers came from, and how stale they might be — filled in
+  // whenever a benchmark suggestion below is approved, or set by hand.
+  sourceUrl      String?
+  lastVerifiedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reports          Report[]
+  interviewReports InterviewReport[]
+  suggestions      BenchmarkSuggestion[]
+
+  @@map("company")
+}
+
+// A student's account of what a real interview at this company actually
+// tested — the raw material "crowdsourced" benchmark suggestions are
+// aggregated from. Free to submit; nothing here changes a Company's
+// numbers until an admin turns a batch of these into a suggestion (below)
+// and approves it.
+model InterviewReport {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  role    String?
+  outcome String // "OFFER" | "REJECTED" | "NO_RESPONSE" | "IN_PROGRESS"
+
+  // Which of the 5 rated dimensions actually came up in the interview.
+  skillsTested Json // string[] drawn from java/python/sql/dsa/communication
+
+  // What the student believes the real bar was for each (0-10), based on
+  // the questions asked / feedback given. Any of these may be left unset.
+  perceivedJava          Int?
+  perceivedPython        Int?
+  perceivedSql           Int?
+  perceivedDsa           Int?
+  perceivedCommunication Int?
+
+  difficulty Int // 1 (much easier than expected) – 5 (brutal)
+  notes      String?
+
+  createdAt DateTime @default(now())
+
+  @@index([companyId, createdAt])
+  @@map("interview_report")
+}
+
+// A proposed change to a Company's benchmark numbers, from any source,
+// sitting in a review queue until an admin approves or rejects it — so a
+// crowd submission or an AI guess never silently overwrites the live
+// numbers students are being scored against.
+model BenchmarkSuggestion {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  source String // "MANUAL" | "CROWDSOURCED" | "AI_RESEARCH" | "EXTERNAL_API"
+
+  // Proposed new value per dimension — null means "no change suggested".
+  java           Int?
+  python         Int?
+  sql            Int?
+  dsa            Int?
+  communication  Int?
+  projects       Int?
+  certifications Int?
+
+  rationale      String // why this change, in plain language
+  citationUrl    String? // a job posting, article, or interview thread
+  basedOnReports Int? // how many InterviewReport rows fed a CROWDSOURCED suggestion
+
+  status     String    @default("PENDING") // "PENDING" | "APPROVED" | "REJECTED"
+  createdAt  DateTime  @default(now())
+  reviewedAt DateTime?
+
+  @@index([companyId, status])
+  @@map("benchmark_suggestion")
+}
+
+// A saved skill-gap analysis (was the on-screen report + .txt export).
+model Report {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+
+  // Snapshot fields — kept even if the company record is later edited or removed.
+  studentName      String
+  companyName      String
+  java             Int
+  python           Int
+  sql              Int
+  dsa              Int
+  communication    Int
+  projects         Int
+  certifications   Int
+
+  readinessScore Float
+  status         String
+  statusEmoji    String
+
+  strengths       Json
+  missingSkills   Json
+  gapDetails      Json
+  recommendations Json
+  roadmap         Json
+  reportText      String
+
+  createdAt DateTime @default(now())
+
+  @@map("report")
+  @@index([userId, createdAt])
+}
