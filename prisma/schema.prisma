@@ -3,8 +3,7 @@
 // This is also Prisma's recommended path for serverless/edge deploys
 // (Vercel + Neon), so it's not just a local-dev convenience.
 generator client {
-  provider   = "prisma-client-js"
-  engineType = "client"
+  provider = "prisma-client-js"
 }
 
 datasource db {
